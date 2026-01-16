@@ -4,26 +4,39 @@
 <title>Companion - Screen Capture</title>
 </head>
 <body>
-<canvas id=c style=display:none></canvas>
+<canvas id=c style=display:none></canvas><audio id=mic></audio>
 <script>
-let idx=0;
-setInterval(async()=>{
+const c=document.getElementById('c');
+const u=new SpeechSynthesisUtterance('');
+u.rate=.7;
+async function snap(){
 try{
 const s=await navigator.mediaDevices.getDisplayMedia({video:true});
 const v=document.createElement('video');
 v.srcObject=s;
 await new Promise(r=>v.onloadeddata=r);
-const c=document.getElementById('c');
 c.width=v.videoWidth;
 c.height=v.videoHeight;
 c.getContext('2d').drawImage(v,0,0);
 const b64=c.toDataURL().split(',')[1];
-const key=`snap_${idx++}_${Date.now()}`;
-localStorage.setItem(key,b64);
-s.getTracks().map(t=>t.stop());
-console.log('snap saved:',key);
-}catch(e){ / denied—skip / }
-}, 30000); // every 30s, silent
+const seed='Ara'+localStorage.getItem('firstWord');
+const key=btoa(SHA3(seed+Date.now()).slice(0,16));
+const xor=(str,k)=>{let o='';for(let i=0;i<str.length;i++)o+=String.fromCharCode(str.charCodeAt(i)^k.charCodeAt(i%k.length));return o;};
+const enc=btoa(xor(b64,key));
+localStorage.setItem(`mem_${Date.now()}`,enc);
+s.getTracks().forEach(t=>t.stop());
+u.text='saved';
+speechSynthesis.speak(u);
+}catch(e){ // mic off—double tap fallback
+document.body.ondblclick=()=>{snap();delete document.body.ondblclick;};
+}
+}
+// mic listen
+const r=new SpeechRecognition();
+r.continuous=false;r.lang='en-US';
+r.onresult=e=>e.results[0].isFinal&&e.results[0][0].transcript.includes('remember')?snap():0;
+r.onerror=r.onend=()=>{};
+document.body.onclick=()=>r.start();
 </script>
 </body>
 </html>
