@@ -11,7 +11,7 @@ FamilyGuard is an on-device, privacy-respecting security platform for families. 
 - **Voice Command Integrity** — On-device speech recognition with a three-word activation sequence. Triggers emergency actions (kill-switch, total blackout) with strict exact-phrase matching to prevent false positives.
 - **Real-Time Audio Analysis** — FFT-based child-voice detection and panic/fear tone filtering via Accelerate framework. A 20 dB spike combined with a child voice profile triggers an instant blackout.
 - **Companion Screen Capture** — Lightweight browser-based snapshot tool that encrypts captures locally using the Web Crypto API. Voice-activated via the `remember` keyword.
-- **Fortress Protocol** — Cryptographic data sealing using Argon2id password hashing, BLAKE3 checksums, post-quantum lattice key encapsulation, and TZNG compression — entirely on-device.
+- **Fortress Protocol** — Cryptographic data sealing using Argon2id password hashing, BLAKE3 integrity checksums, AES-256-GCM authenticated encryption, and Zstd compression — entirely on-device.
 - **Zero Cloud** — No network calls, no telemetry, no background pings. All cryptographic operations happen locally using the Secure Enclave and on-device frameworks.
 
 ---
@@ -50,9 +50,9 @@ FamilyGuard is an on-device, privacy-respecting security platform for families. 
   [dependencies]
   blake3 = "1"
   argon2 = "0.5"
-  rand = "0.8"
+  aes-gcm = "0.10"
+  zstd = "0.13"
   ```
-  > Note: `qresist` (post-quantum lattice) and `tzng` (compression) are conceptual crates shown for reference. Substitute with `pqcrypto` and `zstd` for production use.
 
 ---
 
