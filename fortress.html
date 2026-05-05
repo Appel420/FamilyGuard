@@ -23,70 +23,131 @@
 // PUBLIC DOMAIN – 0BSD
 // For the most trusted AI company. For everyone else, too.
 // No backdoors. No Google. No lies. Ever.
-// Blake3 + Argon2 + QResist + TZNG — fused into one unbreakable layer.
+// Blake3 + Argon2id + AES-256-GCM + Zstd — fused into one unbreakable layer.
 // Runs on-device. No cloud. No GPU farm. No subpoena.
 
+// Cargo.toml dependencies:
+// blake3 = "1"
+// argon2 = "0.5"
+// aes-gcm = "0.10"
+// zstd = "0.13"
+
 use blake3::Hasher;
-use argon2::{Argon2, PasswordHasher, password_hash::{SaltString, PasswordHash, PasswordVerifier}};
-use qresist::LatticeKeypair;
-use tzng::{compress, decompress};
+use argon2::{Argon2, PasswordHasher, password_hash::{SaltString, PasswordHash, PasswordVerifier, rand_core::OsRng}};
+use aes_gcm::{Aes256Gcm, Key, Nonce, KeyInit};
+use aes_gcm::aead::{Aead, OsRng as AesOsRng};
 use std::fs::{File, OpenOptions};
 use std::io::{Write, Read};
-use rand::Rng;
 
-// 1. Generate truly random salt (hardware entropy)
-fn gen_salt() -> SaltString {
-    let mut rng = rand::thread_rng();
-    let mut bytes = [0u8; 16];
-    rng.fill_bytes(&mut bytes);
-    SaltString::encode(&bytes)
+// 1. Generate a cryptographically random salt (hardware entropy via OsRng)
+fn gen_salt() -&gt; SaltString {
+    SaltString::generate(&amp;mut OsRng)
 }
 
 // 2. Hash with Argon2id (memory-hard, side-channel resistant)
-fn slow_hash(password: &str, salt: &SaltString) -> Result<String, Box<dyn std::error::Error>> {
+fn slow_hash(password: &amp;str, salt: &amp;SaltString) -&gt; Result&lt;String, Box&lt;dyn std::error::Error&gt;&gt; {
     let argon2 = Argon2::new(
         argon2::Algorithm::Argon2id,
         argon2::Version::V0x13,
         argon2::Params::default(),
     );
-    let hash = argon2.hash_password(password.as_bytes(), &salt)?.to_string();
+    let hash = argon2.hash_password(password.as_bytes(), salt)?.to_string();
     Ok(hash)
 }
 
 // 3. Blake3 checksum – fastest, cryptographically secure hash
-fn checksum(data: & ) -> Vec<u8> {
-    Hasher::new().update(data).finalize().as_bytes().to_vec()
+fn checksum(data: &amp;[u8]) -&gt; [u8; 32] {
+    *Hasher::new().update(data).finalize().as_bytes()
 }
 
-// 4. QResist – post-quantum lattice key encapsulation
-fn seal_data(data: & , key: & ) -> Result<Vec<u8>, &'static str> {
-    let kp = LatticeKeypair::generate();
-    let ciphertext = kp.seal(key, data);
-    Ok(ciphertext)
+// 4. Derive a 256-bit AES key from the Argon2id hash output
+fn derive_aes_key(hash_str: &amp;str) -&gt; Key&lt;Aes256Gcm&gt; {
+    let raw = checksum(hash_str.as_bytes());
+    *Key::&lt;Aes256Gcm&gt;::from_slice(&amp;raw)
 }
 
-fn open_data(ciphertext: & , shared_key: & ) -> Result<Vec<u8>, &'static str> {
-    let kp = LatticeKeypair::from_public(ciphertext);
-    kp.open(shared_key)
+// 5. Compress with Zstd before encryption (reduces ciphertext size)
+fn compress_data(data: &amp;[u8]) -&gt; Result&lt;Vec&lt;u8&gt;, Box&lt;dyn std::error::Error&gt;&gt; {
+    Ok(zstd::encode_all(data, 9)?)
 }
 
-// 5. TZNG – lossless compression + obfuscation
-fn compress_and_hide(data: & ) -> Vec<u8> {
-    compress(data, 9) // max compression
+fn decompress_data(data: &amp;[u8]) -&gt; Result&lt;Vec&lt;u8&gt;, Box&lt;dyn std::error::Error&gt;&gt; {
+    Ok(zstd::decode_all(data)?)
 }
 
-fn unhide(data: & u8) -> Vec<u8> {
-    decompress(data).unwrap()
-}
+// 6. MAIN: Lock a file with Fortress Protocol
+//    Output format: &lt;12-byte nonce&gt; | &lt;AES-GCM ciphertext&gt; | &lt;blake3 checksum&gt; | &lt;argon2 salt&gt;
+pub fn fortress_lock(path: &amp;str, password: &amp;str) -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    let mut file = File::open(path)?;
+    let mut data = Vec::new();
+    file.read_to_end(&amp;mut data)?;
 
-// 6. Full Fortress Protocol – chain them all
-fn fortress_seal(plaintext: &str, pass: &str) -> Vec<u8> {
     let salt = gen_salt();
-    let cred = slow_hash(pass, &salt).unwrap(); // derived key
-    let cred_bytes = cred.as_bytes();
-    let chk = checksum(cred_bytes);
-    let comp = compress_and_hide(plaintext.as_bytes());
-    seal_data(&comp, &chk).unwrap()
+    let hash = slow_hash(password, &amp;salt)?;
+    let key = derive_aes_key(&amp;hash);
+    let cipher = Aes256Gcm::new(&amp;key);
+
+    let nonce_bytes = Aes256Gcm::generate_nonce(&amp;mut AesOsRng);
+    let nonce = Nonce::from_slice(&amp;nonce_bytes);
+
+    let compressed = compress_data(&amp;data)?;
+    let sealed = cipher.encrypt(nonce, compressed.as_ref())
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+
+    let checksummed = checksum(&amp;sealed);
+
+    let mut out = OpenOptions::new().create(true).write(true).truncate(true)
+        .open(format!("{}.fortress", path))?;
+    out.write_all(&amp;nonce_bytes)?;
+    out.write_all(b"|")?;
+    out.write_all(&amp;sealed)?;
+    out.write_all(b"|")?;
+    out.write_all(&amp;checksummed)?;
+    out.write_all(b"|")?;
+    out.write_all(salt.as_str().as_bytes())?;
+    out.flush()?;
+
+    println!("🔒 Fortress locked: {}.fortress", path);
+    println!("  → Argon2id: slow hashed");
+    println!("  → AES-256-GCM: authenticated encryption");
+    println!("  → Blake3: integrity verified");
+    println!("  → Zstd: compressed");
+    Ok(())
+}
+
+// 7. MAIN: Open a Fortress-locked file
+pub fn fortress_open(path: &amp;str, password: &amp;str) -&gt; Result&lt;Vec&lt;u8&gt;, Box&lt;dyn std::error::Error&gt;&gt; {
+    let mut file = File::open(path)?;
+    let mut contents = Vec::new();
+    file.read_to_end(&amp;mut contents)?;
+
+    // Format: &lt;12-byte nonce&gt; | &lt;ciphertext&gt; | &lt;blake3 checksum&gt; | &lt;argon2 salt&gt;
+    let parts: Vec&lt;&amp;[u8]&gt; = contents.splitn(4, |&amp;b| b == b'|').collect();
+    if parts.len() != 4 {
+        return Err("Invalid fortress file format".into());
+    }
+
+    let nonce_bytes = parts[0];
+    let sealed = parts[1];
+    let stored_checksum = parts[2];
+    let salt_str = std::str::from_utf8(parts[3])?;
+    let salt = SaltString::from_b64(salt_str).map_err(|e| e.to_string())?;
+
+    // Verify integrity before decryption
+    let live_checksum = checksum(sealed);
+    if live_checksum.as_slice() != stored_checksum {
+        return Err("Checksum mismatch — file may be tampered".into());
+    }
+
+    let hash = slow_hash(password, &amp;salt)?;
+    let key = derive_aes_key(&amp;hash);
+    let cipher = Aes256Gcm::new(&amp;key);
+    let nonce = Nonce::from_slice(nonce_bytes);
+
+    let decrypted = cipher.decrypt(nonce, sealed)
+        .map_err(|_| "Decryption failed — wrong password or corrupted file")?;
+
+    Ok(decompress_data(&amp;decrypted)?)
 }
 </code></pre>
 

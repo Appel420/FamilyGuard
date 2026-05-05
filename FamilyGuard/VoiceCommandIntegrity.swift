@@ -18,8 +18,8 @@
 import Foundation
 import Speech
 import AVFoundation
-import Security
 import Accelerate  // For FFT and audio processing
+import CryptoKit   // For SHA-256 hashing (replaces CommonCrypto)
 
 class VoiceCommandIntegrity: NSObject, SFSpeechRecognizerDelegate {
     static let shared = VoiceCommandIntegrity()
@@ -61,9 +61,19 @@ class VoiceCommandIntegrity: NSObject, SFSpeechRecognizerDelegate {
             }
         }
         
-        AVAudioSession.sharedInstance().requestRecordPermission { granted in
-            if !granted {
-                print("Voice command integrity: Microphone access denied.")
+        // AVAudioApplication.requestRecordPermission is the preferred API from iOS 17+.
+        // Falls back to AVAudioSession for earlier OS versions.
+        if #available(iOS 17.0, macOS 14.0, *) {
+            AVAudioApplication.requestRecordPermission { granted in
+                if !granted {
+                    print("Voice command integrity: Microphone access denied.")
+                }
+            }
+        } else {
+            AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                if !granted {
+                    print("Voice command integrity: Microphone access denied.")
+                }
             }
         }
     }
@@ -171,10 +181,11 @@ class VoiceCommandIntegrity: NSObject, SFSpeechRecognizerDelegate {
         }
     }
     
-    // Hash transcription using Secure Enclave for integrity (prevents tampering).
+    // Hash transcription using CryptoKit SHA-256 for integrity verification.
     private func hashTranscription(_ transcription: String) -> Data? {
-        let data = transcription.data(using: .utf8)!
-        return data.sha256()  // Extension for SHA-256; implement securely.
+        let data = Data(transcription.utf8)
+        let digest = SHA256.hash(data: data)
+        return Data(digest)
     }
     
     // Calculate decibel level from buffer.
@@ -233,16 +244,5 @@ class VoiceCommandIntegrity: NSObject, SFSpeechRecognizerDelegate {
         if !available {
             stopListening()
         }
-    }
-}
-
-// Extension for SHA-256 hashing (simplified; use CryptoKit in production for Secure Enclave).
-extension Data {
-    func sha256() -> Data {
-        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-        withUnsafeBytes {
-            _ = CC_SHA256($0.baseAddress, CC_LONG(count), &hash)
-        }
-        return Data(hash)
     }
 }

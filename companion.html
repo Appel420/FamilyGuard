@@ -9,34 +9,74 @@
 const c=document.getElementById('c');
 const u=new SpeechSynthesisUtterance('');
 u.rate=.7;
+
+// Retrieve or generate a cryptographically random device seed (stored in localStorage).
+function getDeviceSeed() {
+  let seed = localStorage.getItem('fg_device_seed');
+  if (!seed) {
+    const buf = crypto.getRandomValues(new Uint8Array(32));
+    seed = btoa(String.fromCharCode(...buf));
+    localStorage.setItem('fg_device_seed', seed);
+  }
+  return seed;
+}
+
+// Derive an AES-GCM key from a seed and a per-operation random PBKDF2 salt.
+async function deriveKey(seed, pbkdf2Salt) {
+  const enc = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey(
+    'raw', enc.encode(seed), 'PBKDF2', false, ['deriveKey']
+  );
+  return crypto.subtle.deriveKey(
+    {name:'PBKDF2', salt:pbkdf2Salt, iterations:100000, hash:'SHA-256'},
+    baseKey,
+    {name:'AES-GCM', length:256},
+    false,
+    ['encrypt','decrypt']
+  );
+}
+
 async function snap(){
-try{
-const s=await navigator.mediaDevices.getDisplayMedia({video:true});
-const v=document.createElement('video');
-v.srcObject=s;
-await new Promise(r=>v.onloadeddata=r);
-c.width=v.videoWidth;
-c.height=v.videoHeight;
-c.getContext('2d').drawImage(v,0,0);
-const b64=c.toDataURL().split(',')[1];
-const seed='Ara'+localStorage.getItem('firstWord');
-const key=btoa(SHA3(seed+Date.now()).slice(0,16));
-const xor=(str,k)=>{let o='';for(let i=0;i<str.length;i++)o+=String.fromCharCode(str.charCodeAt(i)^k.charCodeAt(i%k.length));return o;};
-const enc=btoa(xor(b64,key));
-localStorage.setItem(`mem_${Date.now()}`,enc);
-s.getTracks().forEach(t=>t.stop());
-u.text='saved';
-speechSynthesis.speak(u);
-}catch(e){ // mic off—double tap fallback
-document.body.ondblclick=()=>{snap();delete document.body.ondblclick;};
+  try{
+    const s=await navigator.mediaDevices.getDisplayMedia({video:true});
+    const v=document.createElement('video');
+    v.srcObject=s;
+    await new Promise(r=>v.onloadeddata=r);
+    c.width=v.videoWidth;
+    c.height=v.videoHeight;
+    c.getContext('2d').drawImage(v,0,0);
+    const b64=c.toDataURL().split(',')[1];
+    const seed=getDeviceSeed();
+    const pbkdf2Salt=crypto.getRandomValues(new Uint8Array(16));
+    const key=await deriveKey(seed, pbkdf2Salt);
+    const enc=new TextEncoder();
+    const iv=crypto.getRandomValues(new Uint8Array(12));
+    const encrypted=await crypto.subtle.encrypt(
+      {name:'AES-GCM',iv},key,enc.encode(b64)
+    );
+    const payload={
+      pbkdf2Salt:Array.from(pbkdf2Salt),
+      iv:Array.from(iv),
+      data:Array.from(new Uint8Array(encrypted))
+    };
+    localStorage.setItem(`mem_${Date.now()}`,JSON.stringify(payload));
+    s.getTracks().forEach(t=>t.stop());
+    u.text='saved';
+    speechSynthesis.speak(u);
+  }catch(e){ // fallback on permission denied
+    document.body.ondblclick=()=>{snap();delete document.body.ondblclick;};
+  }
 }
+
+// Use the vendor-prefixed fallback where needed (Safari ≤ 14).
+const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SpeechRecognitionAPI) {
+  const r=new SpeechRecognitionAPI();
+  r.continuous=false;r.lang='en-US';
+  r.onresult=e=>e.results[0].isFinal&&e.results[0][0].transcript.includes('remember')?snap():0;
+  r.onerror=r.onend=()=>{};
+  document.body.onclick=()=>r.start();
 }
-// mic listen
-const r=new SpeechRecognition();
-r.continuous=false;r.lang='en-US';
-r.onresult=e=>e.results[0].isFinal&&e.results[0][0].transcript.includes('remember')?snap():0;
-r.onerror=r.onend=()=>{};
-document.body.onclick=()=>r.start();
 </script>
 </body>
 </html>
