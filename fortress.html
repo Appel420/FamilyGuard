@@ -67,12 +67,12 @@ fn derive_aes_key(hash_str: &amp;str) -&gt; Key&lt;Aes256Gcm&gt; {
 }
 
 // 5. Compress with Zstd before encryption (reduces ciphertext size)
-fn compress_data(data: &amp;[u8]) -&gt; Vec&lt;u8&gt; {
-    zstd::encode_all(data, 9).unwrap_or_else(|_| data.to_vec())
+fn compress_data(data: &amp;[u8]) -&gt; Result&lt;Vec&lt;u8&gt;, Box&lt;dyn std::error::Error&gt;&gt; {
+    Ok(zstd::encode_all(data, 9)?)
 }
 
-fn decompress_data(data: &amp;[u8]) -&gt; Vec&lt;u8&gt; {
-    zstd::decode_all(data).unwrap_or_else(|_| data.to_vec())
+fn decompress_data(data: &amp;[u8]) -&gt; Result&lt;Vec&lt;u8&gt;, Box&lt;dyn std::error::Error&gt;&gt; {
+    Ok(zstd::decode_all(data)?)
 }
 
 // 6. MAIN: Lock a file with Fortress Protocol
@@ -90,7 +90,7 @@ pub fn fortress_lock(path: &amp;str, password: &amp;str) -&gt; Result&lt;(), Box
     let nonce_bytes = Aes256Gcm::generate_nonce(&amp;mut AesOsRng);
     let nonce = Nonce::from_slice(&amp;nonce_bytes);
 
-    let compressed = compress_data(&amp;data);
+    let compressed = compress_data(&amp;data)?;
     let sealed = cipher.encrypt(nonce, compressed.as_ref())
         .map_err(|e| format!("Encryption failed: {}", e))?;
 
@@ -135,7 +135,7 @@ pub fn fortress_open(path: &amp;str, password: &amp;str) -&gt; Result&lt;Vec&lt;
 
     // Verify integrity before decryption
     let live_checksum = checksum(sealed);
-    if live_checksum != stored_checksum {
+    if live_checksum.as_slice() != stored_checksum {
         return Err("Checksum mismatch — file may be tampered".into());
     }
 
@@ -147,7 +147,7 @@ pub fn fortress_open(path: &amp;str, password: &amp;str) -&gt; Result&lt;Vec&lt;
     let decrypted = cipher.decrypt(nonce, sealed)
         .map_err(|_| "Decryption failed — wrong password or corrupted file")?;
 
-    Ok(decompress_data(&amp;decrypted))
+    Ok(decompress_data(&amp;decrypted)?)
 }
 </code></pre>
 

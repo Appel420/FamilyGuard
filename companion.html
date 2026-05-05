@@ -10,14 +10,25 @@ const c=document.getElementById('c');
 const u=new SpeechSynthesisUtterance('');
 u.rate=.7;
 
-// Derive a per-snapshot AES-GCM key from a seed using PBKDF2 (Web Crypto API).
-async function deriveKey(seed) {
+// Retrieve or generate a cryptographically random device seed (stored in localStorage).
+function getDeviceSeed() {
+  let seed = localStorage.getItem('fg_device_seed');
+  if (!seed) {
+    const buf = crypto.getRandomValues(new Uint8Array(32));
+    seed = btoa(String.fromCharCode(...buf));
+    localStorage.setItem('fg_device_seed', seed);
+  }
+  return seed;
+}
+
+// Derive an AES-GCM key from a seed and a per-operation random PBKDF2 salt.
+async function deriveKey(seed, pbkdf2Salt) {
   const enc = new TextEncoder();
   const baseKey = await crypto.subtle.importKey(
     'raw', enc.encode(seed), 'PBKDF2', false, ['deriveKey']
   );
   return crypto.subtle.deriveKey(
-    {name:'PBKDF2', salt:enc.encode('familyguard-companion'), iterations:100000, hash:'SHA-256'},
+    {name:'PBKDF2', salt:pbkdf2Salt, iterations:100000, hash:'SHA-256'},
     baseKey,
     {name:'AES-GCM', length:256},
     false,
@@ -35,14 +46,16 @@ async function snap(){
     c.height=v.videoHeight;
     c.getContext('2d').drawImage(v,0,0);
     const b64=c.toDataURL().split(',')[1];
-    const seed='Ara'+(localStorage.getItem('firstWord')||'');
-    const key=await deriveKey(seed+Date.now());
+    const seed=getDeviceSeed();
+    const pbkdf2Salt=crypto.getRandomValues(new Uint8Array(16));
+    const key=await deriveKey(seed, pbkdf2Salt);
     const enc=new TextEncoder();
     const iv=crypto.getRandomValues(new Uint8Array(12));
     const encrypted=await crypto.subtle.encrypt(
       {name:'AES-GCM',iv},key,enc.encode(b64)
     );
     const payload={
+      pbkdf2Salt:Array.from(pbkdf2Salt),
       iv:Array.from(iv),
       data:Array.from(new Uint8Array(encrypted))
     };
